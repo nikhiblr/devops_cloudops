@@ -1,0 +1,128 @@
+#!/bin/bash
+sudo amazon-linux-extras enable python3.8
+sudo yum install -y python3.8 python38-devel
+sudo yum install -y httpd httpd-tools httpd-devel mod24_wsgi
+sudo yum groupinstall "Development tools" -y
+sudo yum install -y https://kojipkgs.fedoraproject.org//packages/sqlite/3.9.0/1.fc21/x86_64/sqlite-3.9.0-1.fc21.x86_64.rpm
+
+
+sudo wget https://github.com/GrahamDumpleton/mod_wsgi/archive/4.7.1.tar.gz
+sudo tar -xzf 4.7.1.tar.gz
+cd mod_wsgi-4.7.1
+sudo ./configure --with-apxs=/usr/bin/apxs --with-python=/usr/bin/python3.8
+sudo make
+sudo make install
+sudo chmod 755 /usr/lib64/httpd/modules/mod_wsgi.so
+sudo mkdir /app
+sudo chown -R ec2-user:apache /app
+python3.8 -m venv /app/venv
+source /app/venv/bin/activate
+pip install boto3==1.17.58 Django==3.2.3 django-storages==1.11.1
+cd /app
+django-admin startproject mysite
+cd /app/mysite/
+django-admin startapp upload
+
+
+=================================================================
+Settings.py
+=================================================================
+
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    'storages',
+    'upload',
+]
+
+USE_S3 = 'True'
+#AWS_ACCESS_KEY_ID = your_access_key_id
+#AWS_SECRET_ACCESS_KEY = your_secret_access_key
+AWS_STORAGE_BUCKET_NAME = 'django-static-files-1984'
+AWS_S3_CUSTOM_DOMAIN = '%s.s3.amazonaws.com' % AWS_STORAGE_BUCKET_NAME
+AWS_DEFAULT_ACL = 'public-read'
+AWS_S3_OBJECT_PARAMETERS = {
+    'CacheControl': 'max-age=86400',
+}
+AWS_LOCATION = 'static'
+
+STATIC_URL = 'https://%s/%s/' % (AWS_S3_CUSTOM_DOMAIN, AWS_LOCATION)
+STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+PUBLIC_MEDIA_LOCATION = 'media'
+MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/{PUBLIC_MEDIA_LOCATION}/'
+DEFAULT_FILE_STORAGE = 'mysite.storage_backends.MediaStorage'
+
+
+
+===================================================================
+./manage.py makemigrations
+if you get the below error
+create_deterministic_function('django_date_extract', 2, _sqlite_datetime_extract)
+django.db.utils.NotSupportedError: deterministic=True requires SQLite 3.8.3 or higher
+
+Open the file vim /home/ec2-user/venv/lib64/python3.8/site-packages/django/db/backends/sqlite3/base.py
+and go to line number 213 and you can see similar to below.
+
+=====================================================================================
+ create_deterministic_function = functools.partial(
+                conn.create_function,
+                deterministic=True,
+            )
+
+and change deterministic=True, to deterministic=False, Like given below.
+------------------------ Update like below ------------------------------------------
+create_deterministic_function = functools.partial(
+                conn.create_function,
+                deterministic=False,
+            )
+======================================================================================
+
+udo chgrp -R /app
+sudo chmod -R 775 /app
+
+Now time to configure apache.
+===============================
+
+Just a bit for security hardening.
+
+sudo cat <<EOT >> /etc/httpd/conf/httpd.conf
+ServerSignature Off
+ServerTokens Prod
+EOT
+=====================
+
+Create the config file like below,
+
+sudo cat <<EOT >> /etc/httpd/conf.d/app.conf 
+LoadModule wsgi_module modules/mod_wsgi.so
+WSGIScriptAlias / /app/mysite/mysite/wsgi.py
+WSGIPythonHome /app/venv
+WSGIPythonPath /app/mysite
+
+Alias /robots.txt /app/mysite/static/robots.txt
+Alias /favicon.ico /app/mysite/static/favicon.ico
+
+Alias /media/ /app/mysite/media/
+Alias /static/ /app/mysite/static/
+
+<Directory /app/mysite/static>
+Require all granted
+</Directory>
+
+<Directory /app/mysite/media>
+Require all granted
+</Directory>
+
+<Directory /app/mysite/mysite>
+<Files wsgi.py>
+Require all granted
+</Files>
+</Directory>
+EOT
+
+===============================
+
