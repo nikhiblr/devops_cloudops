@@ -9,7 +9,9 @@ systemctl start httpd && systemctl enable httpd
 
 cat <<EOT >> /etc/httpd/conf/httpd.conf
 ServerSignature Off
-ServerTokens Prod
+SecRuleEngine on
+ServerTokens Full
+SecServerSignature "My Server"
 EOT
 
 # now install Let's encrypt 
